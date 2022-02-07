@@ -1,6 +1,8 @@
 ##################################################################
 #   SPDI Format parser for added Parsimony between variant callers#
-#   Author: Dave Yarmosh, Senior Bioinformatician ATCC 25JAN2022  #
+#   Authors: Dave Yarmosh, Senior Bioinformatician ATCC 25JAN2022 #
+#                          dyarmosh@atcc.org                      #
+#           Ford Combs, Bioinformatician ATCC 25JAN2022           #
 #                         Version 1.0                             #
 ###################################################################
 

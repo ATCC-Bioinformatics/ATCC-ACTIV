@@ -1,52 +1,205 @@
-##################################################################
+###################################################################
 #   SPDI Format parser for added Parsimony between variant callers#
-#   Authors: Dave Yarmosh, Senior Bioinformatician ATCC 25JAN2022 #
-#                          dyarmosh@atcc.org                      #
-#           Ford Combs, Bioinformatician ATCC 25JAN2022           #
-#                         Version 1.0                             #
+#   Author: Dave Yarmosh, Senior Bioinformatician ATCC 21MAR2022  #
+#                         Version 1.1                             #
 ###################################################################
 
 import os
 import pandas as pd
+import re
 from Bio import pairwise2
-#add argument parser later
-df = pd.read_csv('combined_results16_spdi_reprocessed.csv')
-for index,row in df.iterrows(): #loop over each row in the SPDI results
-    leftmeta=' '.join([str(row['Index']),row['Group'], row['Acc']]) #get unchanging metadata to the left of the position
-    rightmeta=' '.join([str(row['DP']),str(row['AF']),row['var'],row['type'],row['platform'],row['biosample'],row['Groups'],str(row['avg_AF']),str(row['avg_DP']),row['Platforms']]) #get relatively unchanging metadata from the right of the alt allele
-    if row['type'] == 'SNP': #nothing needs to be done here. Print to stdout
-        print(' '.join([leftmeta,str(row['pos']),row['ref'],row['alt'],rightmeta]))
-    elif row['ref'].startswith(row['alt']): #remove alt alleles from ref from rightmost position #rightmost preserves the variant position value
-        last_match = row['ref'].rfind(row['alt']) #find latest match between entire alt and any ref alleles
+
+def parsim(fname):
+  #handle multiple input data types
+  if (fname.split('.')[-1] == 'xlsx') | (fname.split('.')[-1] == '.xls'):
+    df = pd.read_excel(fname)
+  elif (fname.split('.')[-1] == 'tsv') | (fname.split('.')[-1] == '.txt'):
+    df = pd.read_csv(fname,sep='\t')
+  elif fname.split('.')[-1] == 'csv':
+    df = pd.read_csv(fname)
+  else:
+    print('Error in input data type')
+    break
+
+  #Sort dataframe by group, sample accession, variant position to require that consecutive variants within a group's sample are consecutive
+  df = df.sort_values(by=['Group','Acc','pos'])
+  fout = fname.split('.')[0].split('/')[-1]+'_parsimonious.csv'
+  #set output column names
+  with open(fout, 'w') as f:
+    f.write(','+','.join(df.columns)+'\n')
+  #set temporary columns for capturing consecutive indels
+  df['group_next'] = df.Group.shift(-1)
+  df['Acc_next'] = df.Acc.shift(-1)
+  df['pos_next'] = df.pos.shift(-1)
+  df['ref_next'] = df.ref.shift(-1)
+  df['alt_next'] = df.alt.shift(-1)
+  df['type_next'] = df.type.shift(-1)
+  df['group_last'] = df.Group.shift(1)
+  df['Acc_last'] = df.Acc.shift(1)
+  df['pos_last'] = df.pos.shift(1)
+  df['ref_last'] = df.ref.shift(1)
+  df['alt_last'] = df.alt.shift(1)
+  df['type_last'] = df.type.shift(1)
+  df['tmp'] = ''
+  #make dataframe for deletions.
+  altdf = df[df['alt'] == '-']
+  #make dataframe for insertions.
+  refdf = df[df['ref'] == '-']
+
+
+  #loop over each row in the SPDI results searching for consecutive deletionss by group and sample accession
+  for index,row in altdf.iterrows():
+    if ((row.pos +1 == row.pos_next) | (row.pos_last == row.pos -1)) & ((row.Group == row.group_next) | (row.group_last == row.Group)) & ((row.Acc == row.Acc_next) | (row.Acc_last == row.Acc)) & ((row.type_last == 'InDel') | (row.type_next == 'InDel')):
+      df.at[index,'tmp'] = True
+    else:
+      continue
+
+  #loop over each row in the SPDI results searching for consecutive insertions by group and sample accession
+  for index,row in refdf.iterrows():
+    if ((row.pos +1 == row.pos_next) | (row.pos_last == row.pos -1)) & ((row.Group == row.group_next) | (row.group_last == row.Group)) & ((row.Acc == row.Acc_next) | (row.Acc_last == row.Acc)) & ((row.type_last == 'InDel') | (row.type_next == 'InDel')):
+      df.at[index,'tmp'] = True
+    else:
+      continue
+
+  ##Begin processing consecutive indels
+  #collect consecutive variants
+  df2 = df[df['tmp'] == True]
+  df2 = df2.drop(['tmp'],axis=1)
+  #collect nonconsecutive variants
+  df3 = df[df['tmp'] != True]
+  df3 = df3.drop(['tmp'],axis=1)
+ 
+  ##group consecutive variants by group and sample accession
+  df4 = df2.set_index(['Group','Acc','pos','DP','AF','var','type','platform','biosample','Groups','avg_AF','avg_DP','Platforms'])
+  #try for the circumstance where none exist
+  try:
+    #concatenate consecutive variants #consecutive SNPs will be decomposed later
+    df4 = df4.groupby(['Group','Acc']).transform(lambda x: ''.join(x)).drop_duplicates().reset_index()
+    df4['alt'] = df4['alt'].str.replace(r'-+','-')
+    df4['ref'] = df4['ref'].str.replace(r'-+','-')
+  except:
+    pass
+  
+  #combine consecutive and nonconsecutive variants back into a single table
+  df5 = pd.concat([df3,df4])
+  #get rid of temp columns
+  df5 = df5.drop(['Acc_next','Acc_last','pos_next','pos_last','group_next','group_last','alt_next','alt_last','ref_next','ref_last'],axis=1)
+  #drop duplicates, because the group by will list a record for each consecutive indel
+  df5 = df5.sort_values(['Group','Acc','pos','DP'])
+  df5 = df5.drop_duplicates(['Group','Acc','pos'],keep='last')
+  
+  
+  ##loop over each row in the SPDI results
+  for index,row in df5.iterrows():
+      #get unchanging metadata to the left of the position
+      leftmeta=','.join([str(row['Index']),row['Group'], row['Acc']])
+      #get relatively unchanging metadata from the right of the alt allele
+      rightmeta=','.join([str(row['DP']),str(row['AF']),row['var'],
+                          row['type'],row['platform'],row['biosample'],
+                          row['Groups'],str(row['avg_AF']),
+                          str(row['avg_DP']),row['Platforms']])
+      #nothing needs to be done here. Write to file
+      if row['type'] == 'SNP':
+        with open(fout, 'a') as f:
+          f.write(','.join([leftmeta,
+                            str(row['pos']),row['ref'],row['alt'],
+                            rightmeta])+'\n')
+      #remove alt alleles from ref from rightmost position #rightmost preserves the variant position value
+
+      elif row['ref'].startswith(row['alt']):
+        #find latest match between entire alt and any ref alleles
+        last_match = row['ref'].rfind(row['alt'])
         ref = row['ref'][:last_match]
-        print('{0} {1} {2} - {3}'.format(leftmeta,row['pos'],ref,rightmeta))
-    elif row['alt'].startswith(row['ref']):#remove ref alleles from alt from rightmost position
+        alt = '-'
+        with open(fout, 'a') as f:
+          f.write(','.join([leftmeta,
+                            str(row['pos']),ref,'-',
+                            rightmeta])+'\n')
+
+      #remove ref alleles from alt from rightmost position
+      elif row['alt'].startswith(row['ref']):
         last_match = row['alt'].rfind(row['ref'])
         alt = row['alt'][:last_match]
-        print('{0} {1} - {2} {3}'.format(leftmeta,row['pos'],alt,rightmeta))
-    elif row['alt'] == '-': #handle well-labeled deletions
-        print('{0} {1} {2} - {3}'.format(leftmeta,row['pos'],row['ref'],rightmeta))
-    elif row['ref'] == '-': #handle well-labeled insertions
-        print('{0} {1} - {2} {3}'.format(leftmeta,row['pos'],row['alt'],rightmeta))
-    else: #not a SNP, ref does not start with alt, alt does not start with ref, indel is not well-labeled
-        pos=row['pos'] #Tired of rewriting row[]
-        ref=row['ref']
-        alt=row['alt']
-        ms=pairwise2.align.globalms(ref, alt, 2, -.5, -1, -.1,one_alignment_only=True) #align alt to ref with match score = 2, mismatch penalty = 0.5, gapopen penalty = 1, gap extension penaly = 0.1 and only save the best alignment
-        #print('{0}\n{1}'.format(ms[0][0], ms[0][1])) #uncomment if you want to see what the alignment looks like
-        for i in range(len(ms[0][0])): #loop over the length of the alignment
-            if ms[0][0][i] != ms[0][1][i]: #if the alleles at position i do not match
-                if ms[0][0][i] == '-': #if there's a deletion
-                    rightmeta=' '.join([str(row['DP']),str(row['AF']),row['var'],'InDel',row['platform'],row['biosample'],row['Groups'],str(row['avg_AF']),str(row['avg_DP']),row['Platforms']]) #Updated to explicitly refer to indel
-                else: #assume SNP in InDel call #this might be a source of error - no handling for if there's an insertion in this case
-                    rightmeta=' '.join([str(row['DP']),str(row['AF']),row['var'],'SNP',row['platform'],row['biosample'],row['Groups'],str(row['avg_AF']),str(row['avg_DP']),row['Platforms']]) #updated to explicitly refer to SNP
-                ref=ms[0][0][i]
-                alt=ms[0][1][i]
-                print(leftmeta,' '.join([str(pos+i),ref,alt]),rightmeta)
-            else:
-                ref=ms[0][0][i:]
-                alt=ms[0][1][i:].split('-')[0] #assumes only one set of hyphens/deletions #could put into if for multiple
-                rightmeta=' '.join([str(row['DP']),str(row['AF']),row['var'],row['type'],row['platform'],row['biosample'],row['Groups'],str(row['avg_AF']),str(row['avg_DP']),row['Platforms']])
-                if ref.startswith(alt):
-                    print(' '.join([leftmeta,str(pos+i+len(alt)),ref.replace(alt,'',1),'-',rightmeta]))
-                    break
+        with open(fout, 'a') as f:
+          f.write(','.join([leftmeta,
+                            str(row['pos']),'-',alt,
+                            rightmeta])+'\n')
+
+      #handle well-labeled deletions
+      elif row['alt'] == '-':
+        with open(fout, 'a') as f:
+          f.write(','.join([leftmeta,
+                            str(row['pos']),row['ref'],'-',
+                            rightmeta])+'\n')
+          
+      #handle well-labeled insertions
+      elif row['ref'] == '-':
+        with open(fout, 'a') as f:
+          f.write(','.join([leftmeta,
+                            str(row['pos']),'-',row['alt'],
+                            rightmeta])+'\n')
+
+      #not a SNP, ref does not start with alt, alt does not start with ref, indel is not well-labeled
+      else:
+          pos=row['pos']
+          ref=row['ref']
+          alt=row['alt']
+
+          #align alt to ref with match score = 2, mismatch penalty = 0.5, gapopen penalty = 1, gap extension penaly = 0.1 and only save the best alignment
+          ms=pairwise2.align.globalms(ref, alt, 2, -.5, -1, -.1,
+                                      one_alignment_only=True)
+
+          #loop over the length of the alignment
+          for i in range(len(ms[0][0])):
+              #if the alleles at position i do not match
+              if ms[0][0][i] != ms[0][1][i]:
+                  #if there's a deletion
+                  if ms[0][0][i] == '-':
+                      #Explicitly label InDel
+                      rightmeta=','.join([str(row['DP']),str(row['AF']),
+                                          row['var'],'InDel',row['platform'],
+                                          row['biosample'],row['Groups'],
+                                          str(row['avg_AF']),
+                                          str(row['avg_DP']),
+                                          row['Platforms']])
+                  #assume SNP in InDel call #this might be a source of error - no handling for if there's an insertion in this case
+                  else:
+                      #Explicitly label SNP
+                      rightmeta=','.join([str(row['DP']),str(row['AF']),
+                                          row['var'],'SNP',row['platform'],
+                                          row['biosample'],row['Groups'],
+                                          str(row['avg_AF']),
+                                          str(row['avg_DP']),
+                                          row['Platforms']])
+                  ref=ms[0][0][i]
+                  alt=ms[0][1][i]
+                  with open(fout, 'a') as f:
+                    f.write(','.join([leftmeta,str(pos+i),ref,alt,
+                                      rightmeta])+'\n')
+                  
+              else:
+                  ref=ms[0][0][i:]
+                  #assumes only one set of hyphens/deletions #could put into if for multiple. #Have not witnessed that complicated a variant/alignment
+                  alt=ms[0][1][i:].split('-')[0]
+                  rightmeta=','.join([str(row['DP']),str(row['AF']),
+                                      row['var'],row['type'],row['platform'],
+                                      row['biosample'],row['Groups'],
+                                      str(row['avg_AF']),
+                                      str(row['avg_DP']),
+                                      row['Platforms']])
+                  if ref.startswith(alt):
+                    with open(fout, 'a') as f:
+                      f.write(','.join([leftmeta,
+                                        str(pos+i+len(alt)),
+                                        ref.replace(alt,'',1),
+                                        '-',
+                                        rightmeta])+'\n')
+                      break
+
+
+if __name__ == "__main__":
+    
+    import sys
+    
+    fname = sys.argv[1]
+    parsim(fname)

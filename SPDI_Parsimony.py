@@ -1,7 +1,7 @@
 ###################################################################
 #   SPDI Format parser for added Parsimony between variant callers#
-#   Author: Dave Yarmosh, Senior Bioinformatician ATCC 21MAR2022  #
-#                         Version 1.1                             #
+#   Author: Dave Yarmosh, Senior Bioinformatician ATCC 23JUNE2022  #
+#                         Version 1.2                             #
 ###################################################################
 
 import os
@@ -19,14 +19,15 @@ def parsim(fname):
     df = pd.read_csv(fname)
   else:
     print('Error in input data type')
-    break
 
   #Sort dataframe by group, sample accession, variant position to require that consecutive variants within a group's sample are consecutive
   df = df.sort_values(by=['Group','Acc','pos'])
   fout = fname.split('.')[0].split('/')[-1]+'_parsimonious.csv'
   #set output column names
+  #print(df.columns)
+
   with open(fout, 'w') as f:
-    f.write(','+','.join(df.columns)+'\n')
+    f.write(','.join(df.columns)+'\n')
   #set temporary columns for capturing consecutive indels
   df['group_next'] = df.Group.shift(-1)
   df['Acc_next'] = df.Acc.shift(-1)
@@ -92,39 +93,20 @@ def parsim(fname):
   ##loop over each row in the SPDI results
   for index,row in df5.iterrows():
       #get unchanging metadata to the left of the position
-      leftmeta=','.join([str(row['Index']),row['Group'], row['Acc']])
+      leftmeta=','.join([str(index),row['Group'], row['Acc']])
       #get relatively unchanging metadata from the right of the alt allele
       rightmeta=','.join([str(row['DP']),str(row['AF']),row['var'],
                           row['type'],row['platform'],row['biosample'],
                           row['Groups'],str(row['avg_AF']),
-                          str(row['avg_DP']),row['Platforms']])
+                          str(row['avg_DP']),row['Platforms'],row['Aligner'],row['Caller'],'"{0}"'.format(row['Aligners']),'"{0}"'.format(row['Callers'])])
       #nothing needs to be done here. Write to file
       if row['type'] == 'SNP':
-        with open(fout, 'a') as f:
-          f.write(','.join([leftmeta,
-                            str(row['pos']),row['ref'],row['alt'],
-                            rightmeta])+'\n')
-      #remove alt alleles from ref from rightmost position #rightmost preserves the variant position value
-
-      elif row['ref'].startswith(row['alt']):
-        #find latest match between entire alt and any ref alleles
-        last_match = row['ref'].rfind(row['alt'])
-        ref = row['ref'][:last_match]
-        alt = '-'
-        with open(fout, 'a') as f:
-          f.write(','.join([leftmeta,
-                            str(row['pos']),ref,'-',
-                            rightmeta])+'\n')
-
-      #remove ref alleles from alt from rightmost position
-      elif row['alt'].startswith(row['ref']):
-        last_match = row['alt'].rfind(row['ref'])
-        alt = row['alt'][:last_match]
-        with open(fout, 'a') as f:
-          f.write(','.join([leftmeta,
-                            str(row['pos']),'-',alt,
-                            rightmeta])+'\n')
-
+         for i in range(0,len(row['ref'])):
+           if row['ref'][i] != row['alt'][i]:
+             with open(fout, 'a') as f:
+               f.write(','.join([leftmeta,
+                               str(row['pos']+i),row['ref'][i],row['alt'][i],
+                               rightmeta])+'\n')
       #handle well-labeled deletions
       elif row['alt'] == '-':
         with open(fout, 'a') as f:
@@ -138,8 +120,62 @@ def parsim(fname):
           f.write(','.join([leftmeta,
                             str(row['pos']),'-',row['alt'],
                             rightmeta])+'\n')
+          
+      #remove alt alleles from ref from rightmost position #rightmost preserves the variant position value
+      elif ',' in row['alt']: #handle multiple variants at a single site
+        for var in row['alt'].split(','): #loop over them
+          if len(var) == 1:
+            vartype = 'SNP'
+          else: #not observed, but handled
+            vartype = 'InDel'
+            if row['ref'].startswith(var):
+  #find latest match between entire alt and any ref alleles
+              last_match = row['ref'].find(var) + len(var)
+              ref = row['ref'][last_match:] #new
+              pos = row['pos'] + last_match #new
+              alt = '-'
 
-      #not a SNP, ref does not start with alt, alt does not start with ref, indel is not well-labeled
+          
+  #remove ref alleles from alt from rightmost position
+            elif var.startswith(row['ref']):
+              last_match = var.find(row['ref']) + len(row['ref'])
+              alt = var[last_match+1:]
+              pos = row['pos'] + last_match + 1
+              ref = '-'
+
+          rightmeta=','.join([str(row['DP']),str(row['AF']),'"{0}"'.format(row['var']),
+                          vartype,row['platform'],row['biosample'],
+                          row['Groups'],str(row['avg_AF']),
+                          str(row['avg_DP']),row['Platforms'],row['Aligner'],row['Caller'],'"{0}"'.format(row['Aligners']),'"{0}"'.format(row['Callers'])])
+          with open (fout,'a') as f:
+            f.write(','.join([leftmeta,
+                            str(row['pos']),row['ref'],var,rightmeta])+'\n')
+
+      elif row['ref'].startswith(row['alt']):
+        #find latest match between entire alt and any ref alleles
+        last_match = row['ref'].find(row['alt']) + len(row['alt'])
+        ref = row['ref'][last_match:] #new
+        pos = row['pos'] + last_match #new
+        alt = '-'
+        with open(fout, 'a') as f:
+          f.write(','.join([leftmeta,
+                            str(pos),ref,alt,
+                             rightmeta])+'\n')
+          
+      #remove ref alleles from alt from rightmost position
+      elif row['alt'].startswith(row['ref']):
+        last_match = row['alt'].find(row['ref']) + len(row['ref'])
+        alt = row['alt'][last_match:]
+        pos = row['pos'] + last_match
+        ref = '-'
+        with open(fout, 'a') as f:
+          f.write(','.join([leftmeta,
+                            str(pos),ref,alt,
+                            rightmeta])+'\n')
+
+
+
+     #not a SNP, ref does not start with alt, alt does not start with ref, indel is not well-labeled
       else:
           pos=row['pos']
           ref=row['ref']
@@ -161,7 +197,7 @@ def parsim(fname):
                                           row['biosample'],row['Groups'],
                                           str(row['avg_AF']),
                                           str(row['avg_DP']),
-                                          row['Platforms']])
+                                          row['Platforms'],row['Aligner'],row['Caller'],'"{0}"'.format(row['Aligners']),'"{0}"'.format(row['Callers'])])
                   #assume SNP in InDel call #this might be a source of error - no handling for if there's an insertion in this case
                   else:
                       #Explicitly label SNP
@@ -170,7 +206,7 @@ def parsim(fname):
                                           row['biosample'],row['Groups'],
                                           str(row['avg_AF']),
                                           str(row['avg_DP']),
-                                          row['Platforms']])
+                                          row['Platforms'],row['Aligner'],row['Caller'],'"{0}"'.format(row['Aligners']),'"{0}"'.format(row['Callers'])])
                   ref=ms[0][0][i]
                   alt=ms[0][1][i]
                   with open(fout, 'a') as f:
@@ -186,7 +222,7 @@ def parsim(fname):
                                       row['biosample'],row['Groups'],
                                       str(row['avg_AF']),
                                       str(row['avg_DP']),
-                                      row['Platforms']])
+                                      row['Platforms'],row['Aligner'],row['Caller'],'"{0}"'.format(row['Aligners']),'"{0}"'.format(row['Callers'])])
                   if ref.startswith(alt):
                     with open(fout, 'a') as f:
                       f.write(','.join([leftmeta,

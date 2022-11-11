@@ -59,12 +59,6 @@ pre_QC(){
   echo "$(date) Beginning Pre-QC with fastp." | tee -a "$log_path" >&2
   echo "--------------------------------------------------------------------------------------------------------------------------------------------------------------------" >&2
   #### Pre-QC ####
-  # fastp --n_base_limit 10 --qualified_quality_phred 30 --unqualified_percent_limit 10 \
-  # -i $fwd -I $rev -o "$outdir"/$(basename $fwd .fastq.gz).filtered.fastq.gz -O "$outdir"/$(basename $rev .fastq.gz).filtered.fastq.gz \
-  # -h "$outdir"/pre_QC/fastp.html -j "$outdir"/pre_QC/fastp.json
-  # fastp --n_base_limit 10 --qualified_quality_phred 25 --unqualified_percent_limit 20 \
-  # -i $fwd -I $rev -o "$outdir"/$(basename $fwd .fastq.gz).filtered.fastq.gz -O "$outdir"/$(basename $rev .fastq.gz).filtered.fastq.gz \
-  # -h "$outdir"/pre_QC/fastp.html -j "$outdir"/pre_QC/fastp.json
   fastp -i $fwd -I $rev -o "$outdir"/$(basename $fwd .fastq.gz).filtered.fastq.gz \
   --detect_adapter_for_pe \
   -O "$outdir"/$(basename $rev .fastq.gz).filtered.fastq.gz \
